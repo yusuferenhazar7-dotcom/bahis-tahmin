@@ -1,137 +1,123 @@
 import streamlit as st
 import re
 
-# 1. SAYFA AYARLARI (En üstte olmalı)
-st.set_page_config(page_title="Universal Maç Tahmin", layout="wide")
+# 1. SAYFA AYARLARI (GİRİNTİSİZ - EN ÜSTTE)
+st.set_page_config(page_title="Gelişmiş Maç Tahmin", layout="wide")
 
-# 2. VERİ AYRIŞTIRICI FONKSİYON
-def parse_flashscore_universal(raw_data, team_name):
+# 2. GELİŞMİŞ VERİ AYRIŞTIRICI (DİKEY FORMAT DESTEKLİ)
+def parse_flashscore_data(raw_data, team_name):
     matches = []
-    # Kupa ve hazırlık maçlarını dışlamak için anahtar kelimeler
-    exclude_list = ['CUP', 'KUP', 'CDR', 'CL', 'EL', 'COL', 'FA', 'DFB', 'FRI', 'HAZ']
+    # Kupa/Hazırlık kelimeleri
+    exclude = ['CUP', 'KUP', 'CDR', 'CL', 'EL', 'COL', 'FA', 'DFB', 'FRI', 'HAZ']
     
-    lines = raw_data.strip().split('\n')
-    for line in lines:
-        tarih_match = re.search(r'(\d{2}\.\d{2}\.\d{2})', line)
-        if tarih_match:
-            # Satırda dışlanacak kelime var mı kontrol et
-            if any(exc in line.upper() for exc in exclude_list):
+    # Veriyi satırlara böl ve temizle
+    lines = [l.strip() for l in raw_data.split('\n') if l.strip()]
+    
+    # Dikey veriyi tarayarak maçları bul
+    for i in range(len(lines)):
+        # Satırda G, M veya B sonucu varsa, bir önceki satırlarda skor ve takım aramaya başla
+        if lines[i] in ['G', 'M', 'B']:
+            try:
+                # G/M/B'den hemen önceki iki satır skorlardır (Genelde i-1 ve i-2)
+                s1 = int(lines[i-2])
+                s2 = int(lines[i-1])
+                
+                # Takım ismi G/M/B'den önceki 3. veya 4. satırda olabilir
+                # Bu kontrolü kupa maçlarını elemek için yapıyoruz
+                is_kupa = False
+                for j in range(1, 6):
+                    if i-j >= 0 and any(exc in lines[i-j].upper() for exc in exclude):
+                        is_kupa = True
+                
+                if not is_kupa:
+                    # Basit Mantık: Eğer takım ismi skordan hemen önceyse EV, değilse DEP
+                    # Flashscore dikey kopyada takım ismi genellikle skorun üstündedir
+                    # Senin girdiğin takım ismi i-3 veya i-4'te mi?
+                    context = " ".join(lines[max(0, i-6):i]).lower()
+                    
+                    if team_name.lower() in context:
+                        # Takım isminin pozisyonuna göre ev/dep tespiti
+                        # Eğer takım ismi 1. skordan önceyse ev sahibi
+                        team_idx = context.find(team_name.lower())
+                        score_idx = context.find(str(s1))
+                        
+                        is_home = team_idx < score_idx
+                        
+                        matches.append({
+                            'is_home': is_home,
+                            'scored': s1 if is_home else s2,
+                            'conceded': s2 if is_home else s1
+                        })
+            except (ValueError, IndexError):
                 continue
-            
-            # Skoru ve sonucu bul (Örn: 21G, 03M, 11B)
-            score_match = re.search(r'(\d)(\d)[GMB]', line)
-            if score_match:
-                score_home = int(score_match.group(1))
-                score_away = int(score_match.group(2))
                 
-                # Takım isminin konumuna göre ev/dep tespiti
-                score_pos = line.find(score_match.group(0))
-                team_pos = line.find(team_name)
-                is_home = team_pos < score_pos - (len(team_name) // 2)
-                
-                matches.append({
-                    'is_home': is_home,
-                    'scored': score_home if is_home else score_away,
-                    'conceded': score_away if is_home else score_home
-                })
     return matches
 
-# 3. HESAPLAMA FONKSİYONU
+# 3. HESAPLAMA MANTIĞI
 def calculate_metrics(h_home, h_away, a_home, a_away):
-    def get_weighted_stats(match_list):
-        total_fark, total_atilan, total_yenilen, total_deg = 0, 0, 0, 0
+    def get_weighted(match_list):
+        total_f, total_a, total_y, total_d = 0, 0, 0, 0
         n = len(match_list)
         for i, m in enumerate(match_list, 1):
-            weight = n + 1 - i
+            w = n + 1 - i
             fark = m['scored'] - m['conceded']
-            if m['scored'] > m['conceded']: 
-                fark += 1
-            elif m['scored'] < m['conceded']: 
-                fark -= 1
-            
-            total_fark += fark * weight
-            total_atilan += m['scored'] * weight
-            total_yenilen += m['conceded'] * weight
-            total_deg += i
-        return total_fark, total_atilan, total_yenilen, total_deg
+            if m['scored'] > m['conceded']: fark += 1
+            elif m['scored'] < m['conceded']: fark -= 1
+            total_f += fark * w
+            total_a += m['scored'] * w
+            total_y += m['conceded'] * w
+            total_d += i
+        return total_f, total_a, total_y, total_d
 
-    # Her kategori için hesapla
-    ee_f, ee_a, ee_y, ee_d = get_weighted_stats(h_home)
-    ed_f, ed_a, ed_y, ed_d = get_weighted_stats(h_away)
-    de_f, de_a, de_y, de_d = get_weighted_stats(a_home)
-    dd_f, dd_a, dd_y, dd_d = get_weighted_stats(a_away)
+    ee_f, ee_a, ee_y, ee_d = get_weighted(h_home)
+    ed_f, ed_a, ed_y, ed_d = get_weighted(h_away)
+    de_f, de_a, de_y, de_d = get_weighted(a_home)
+    dd_f, dd_a, dd_y, dd_d = get_weighted(a_away)
 
-    # Senin formüllerin
     total = (2 * ee_f) + ed_f - (2 * dd_f) - de_f
-    ev_puan = (2 * ee_f + ed_f)
-    dep_puan = (2 * dd_f + de_f)
-    
-    # Gol Atma Puanları (Payda sıfır olmasın diye min 1 kontrolü eklendi)
     ev_payda = (4*ee_d + 2*ed_d + de_d + dd_d*2)
     dep_payda = (4*dd_d + 2*de_d + ed_d + ee_d*2)
     
-    ev_skor_p = (4*ee_a + 2*ed_a + de_y + dd_y*2) / ev_payda if ev_payda > 0 else 0
-    dep_skor_p = (4*dd_a + 2*de_a + ed_y + ee_y*2) / dep_payda if dep_payda > 0 else 0
+    ev_skor = (4*ee_a + 2*ed_a + de_y + dd_y*2) / ev_payda if ev_payda > 0 else 0
+    dep_skor = (4*dd_a + 2*de_a + ed_y + ee_y*2) / dep_payda if dep_payda > 0 else 0
 
-    return {
-        "total": total, "evPuan": ev_puan, "depPuan": dep_puan,
-        "evSkor": ev_skor_p, "depSkor": dep_skor_p,
-        "ee_f": ee_f, "ed_f": ed_f, "de_f": de_f, "dd_f": dd_f
-    }
+    return {"total": total, "evSkor": ev_skor, "depSkor": dep_skor}
 
-# 4. STREAMLIT ARAYÜZÜ
+# 4. ARAYÜZ
 st.title("⚽ Gelişmiş Maç Tahmin Sistemi")
 
 with st.sidebar:
     st.header("📊 Maç Adetleri")
-    ee_n = st.number_input("Ev - İç Saha", 1, 10, 3)
-    ed_n = st.number_input("Ev - Dış Saha", 1, 10, 3)
-    de_n = st.number_input("Dep - İç Saha", 1, 10, 3)
-    dd_n = st.number_input("Dep - Dış Saha", 1, 10, 3)
+    n_ee = st.number_input("Ev - İç Saha", 1, 10, 3)
+    n_ed = st.number_input("Ev - Dış Saha", 1, 10, 3)
+    n_de = st.number_input("Dep - İç Saha", 1, 10, 3)
+    n_dd = st.number_input("Dep - Dış Saha", 1, 10, 3)
 
 c1, c2 = st.columns(2)
 with c1:
-    h_name = st.text_input("Ev Takımı Adı", "Ath. Bilbao")
-    h_data = st.text_area("Ev Takımı Son Maçlar (Flashscore)", height=200)
+    h_name = st.text_input("Ev Takımı", "Ath. Bilbao")
+    h_data = st.text_area("Ev Verisi (Flashscore)", height=200)
 with c2:
-    a_name = st.text_input("Deplasman Takımı Adı", "Real Sociedad")
-    a_data = st.text_area("Deplasman Takımı Son Maçlar (Flashscore)", height=200)
+    a_name = st.text_input("Deplasman Takımı", "Real Sociedad")
+    a_data = st.text_area("Deplasman Verisi (Flashscore)", height=200)
 
 if st.button("HESAPLA"):
     if h_data and a_data:
-        h_res = parse_flashscore_universal(h_data, h_name)
-        a_res = parse_flashscore_universal(a_data, a_name)
+        h_res = parse_flashscore_data(h_data, h_name)
+        a_res = parse_flashscore_data(a_data, a_name)
         
-        h_home = [m for m in h_res if m['is_home']][:ee_n]
-        h_away = [m for m in h_res if not m['is_home']][:ed_n]
-        a_home = [m for m in a_res if m['is_home']][:de_n]
-        a_away = [m for m in a_res if not m['is_home']][:dd_n]
+        h_h = [m for m in h_res if m['is_home']][:n_ee]
+        h_a = [m for m in h_res if not m['is_home']][:n_ed]
+        a_h = [m for m in a_res if m['is_home']][:n_de]
+        a_a = [m for m in a_res if not m['is_home']][:n_dd]
 
-        if len(h_home) < ee_n or len(h_away) < ed_n or len(a_home) < de_n or len(a_away) < dd_n:
-            st.error(f"⚠️ Yetersiz lig maçı verisi! \n\n"
-                     f"Bulunan - Ev İç: {len(h_home)}, Ev Dış: {len(h_away)}, Dep İç: {len(a_home)}, Dep Dış: {len(a_away)}")
+        if len(h_h) < n_ee or len(h_a) < n_ed or len(a_h) < n_de or len(a_a) < n_dd:
+            st.error(f"Yetersiz Veri! Bulunan -> Ev İç:{len(h_h)}, Ev Dış:{len(h_a)}, Dep İç:{len(a_h)}, Dep Dış:{len(a_a)}")
         else:
-            res = calculate_metrics(h_home, h_away, a_home, a_away)
+            res = calculate_metrics(h_h, h_a, a_h, a_a)
+            if res['total'] > 2: st.success(f"🔥 {h_name} BAS KARSIIM")
+            elif res['total'] < -2: st.warning(f"✈️ SERİ {a_name} BASS")
+            else: st.info("⚖️ BERABERE OLABİLİR")
             
-            # Karar ve Mesajlar
-            if res['total'] > 2:
-                st.success(f"✅ {h_name} BAS KARSIIM")
-            elif res['total'] < -2:
-                st.warning(f"🚀 SERİ {a_name} BASS")
-            else:
-                st.info("⚖️ BERABERE OLUR GİBİ MORUK AMA COK DA INANMA")
-
-            # Metrik Ekranı
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Genel Total", f"{res['total']}")
-            m2.metric(f"{h_name} Gol Puanı", f"{res['evSkor']:.2f}")
-            m3.metric(f"{a_name} Gol Puanı", f"{res['depSkor']:.2f}")
-            
-            st.write("---")
-            st.write(f"**Detaylı Analiz Verileri:**")
-            st.write(f"- {h_name} İç Saha Toplamı (x2): {res['ee_f']*2}")
-            st.write(f"- {h_name} Dış Saha Toplamı: {res['ed_f']}")
-            st.write(f"- {a_name} İç Saha Toplamı: {res['de_f']}")
-            st.write(f"- {a_name} Dış Saha Toplamı (x2): {res['dd_f']*2}")
-    else:
-        st.error("Lütfen her iki takımın maç verilerini de yapıştırın.")
+            st.metric("Genel Total", f"{res['total']}")
+            st.write(f"{h_name} Gol Gücü: {res['evSkor']:.2f} | {a_name} Gol Gücü: {res['depSkor']:.2f}")
