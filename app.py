@@ -1,6 +1,10 @@
 import streamlit as st
 import re
 
+# 1. SAYFA AYARLARI (En üstte olmalı)
+st.set_page_config(page_title="Universal Maç Tahmin", layout="wide")
+
+# 2. VERİ AYRIŞTIRICI FONKSİYON
 def parse_flashscore_universal(raw_data, team_name):
     matches = []
     # Kupa ve hazırlık maçlarını dışlamak için anahtar kelimeler
@@ -31,15 +35,19 @@ def parse_flashscore_universal(raw_data, team_name):
                     'conceded': score_away if is_home else score_home
                 })
     return matches
-    def calculate_metrics(h_home, h_away, a_home, a_away):
+
+# 3. HESAPLAMA FONKSİYONU
+def calculate_metrics(h_home, h_away, a_home, a_away):
     def get_weighted_stats(match_list):
         total_fark, total_atilan, total_yenilen, total_deg = 0, 0, 0, 0
         n = len(match_list)
         for i, m in enumerate(match_list, 1):
             weight = n + 1 - i
             fark = m['scored'] - m['conceded']
-            if m['scored'] > m['conceded']: fark += 1
-            elif m['scored'] < m['conceded']: fark -= 1
+            if m['scored'] > m['conceded']: 
+                fark += 1
+            elif m['scored'] < m['conceded']: 
+                fark -= 1
             
             total_fark += fark * weight
             total_atilan += m['scored'] * weight
@@ -58,18 +66,20 @@ def parse_flashscore_universal(raw_data, team_name):
     ev_puan = (2 * ee_f + ed_f)
     dep_puan = (2 * dd_f + de_f)
     
-    # Gol Atma Puanları
-    ev_skor_p = (4*ee_a + 2*ed_a + de_y + dd_y*2) / (4*ee_d + 2*ed_d + de_d + dd_d*2)
-    dep_skor_p = (4*dd_a + 2*de_a + ed_y + ee_y*2) / (4*dd_d + 2*de_d + ed_d + ee_d*2)
+    # Gol Atma Puanları (Payda sıfır olmasın diye min 1 kontrolü eklendi)
+    ev_payda = (4*ee_d + 2*ed_d + de_d + dd_d*2)
+    dep_payda = (4*dd_d + 2*de_d + ed_d + ee_d*2)
+    
+    ev_skor_p = (4*ee_a + 2*ed_a + de_y + dd_y*2) / ev_payda if ev_payda > 0 else 0
+    dep_skor_p = (4*dd_a + 2*de_a + ed_y + ee_y*2) / dep_payda if dep_payda > 0 else 0
 
     return {
         "total": total, "evPuan": ev_puan, "depPuan": dep_puan,
         "evSkor": ev_skor_p, "depSkor": dep_skor_p,
         "ee_f": ee_f, "ed_f": ed_f, "de_f": de_f, "dd_f": dd_f
     }
-    # BU SATIR DOSYANIN EN ÜSTÜNDE OLMALI (Importlardan hemen sonra)
-st.set_page_config(page_title="Universal Maç Tahmin", layout="wide")
 
+# 4. STREAMLIT ARAYÜZÜ
 st.title("⚽ Gelişmiş Maç Tahmin Sistemi")
 
 with st.sidebar:
@@ -98,19 +108,30 @@ if st.button("HESAPLA"):
         a_away = [m for m in a_res if not m['is_home']][:dd_n]
 
         if len(h_home) < ee_n or len(h_away) < ed_n or len(a_home) < de_n or len(a_away) < dd_n:
-            st.error("⚠️ Yetersiz lig maçı verisi! Lütfen daha fazla maç geçmişi yapıştırın.")
+            st.error(f"⚠️ Yetersiz lig maçı verisi! \n\n"
+                     f"Bulunan - Ev İç: {len(h_home)}, Ev Dış: {len(h_away)}, Dep İç: {len(a_home)}, Dep Dış: {len(a_away)}")
         else:
             res = calculate_metrics(h_home, h_away, a_home, a_away)
             
-            # Karar
-            if res['total'] > 2: st.success(f"✅ {h_name} BAS KARSIIM")
-            elif res['total'] < -2: st.warning(f"🚀 SERİ {a_name} BASS")
-            else: st.info("⚖️ BERABERE OLUR GİBİ MORUK")
+            # Karar ve Mesajlar
+            if res['total'] > 2:
+                st.success(f"✅ {h_name} BAS KARSIIM")
+            elif res['total'] < -2:
+                st.warning(f"🚀 SERİ {a_name} BASS")
+            else:
+                st.info("⚖️ BERABERE OLUR GİBİ MORUK AMA COK DA INANMA")
 
-            # Metrikler
+            # Metrik Ekranı
             m1, m2, m3 = st.columns(3)
             m1.metric("Genel Total", f"{res['total']}")
             m2.metric(f"{h_name} Gol Puanı", f"{res['evSkor']:.2f}")
             m3.metric(f"{a_name} Gol Puanı", f"{res['depSkor']:.2f}")
             
-            st.write(f"**Detaylar:** Ev İç(x2): {res['ee_f']*2} | Ev Dış: {res['ed_f']} | Dep İç: {res['de_f']} | Dep Dış(x2): {res['dd_f']*2}")
+            st.write("---")
+            st.write(f"**Detaylı Analiz Verileri:**")
+            st.write(f"- {h_name} İç Saha Toplamı (x2): {res['ee_f']*2}")
+            st.write(f"- {h_name} Dış Saha Toplamı: {res['ed_f']}")
+            st.write(f"- {a_name} İç Saha Toplamı: {res['de_f']}")
+            st.write(f"- {a_name} Dış Saha Toplamı (x2): {res['dd_f']*2}")
+    else:
+        st.error("Lütfen her iki takımın maç verilerini de yapıştırın.")
