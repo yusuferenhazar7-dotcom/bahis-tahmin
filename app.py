@@ -1,120 +1,127 @@
 import streamlit as st
 import re
+import numpy as np
+import pandas as pd
 
-# 1. SAYFA AYARLARI (GİRİNTİSİZ - EN ÜSTTE OLMALI)
-st.set_page_config(page_title="Gelişmiş Maç Tahmin", layout="wide")
+# --- SAYFA AYARLARI ---
+st.set_page_config(page_title="ProMatch Predictor", layout="wide")
+st.title("⚽ Gelişmiş Maç Tahmin ve Simülasyon Portalı")
+st.markdown("Flashscore verilerini yapıştırın ve ağırlıklı algoritma ile sonucu görün.")
 
-# 2. GELİŞMİŞ VERİ AYRIŞTIRICI (DİKEY FORMAT İÇİN)
-def parse_flashscore_data(raw_data, team_name):
-    matches = []
-    # Kupa ve hazırlık maçlarını dışlamak için anahtar kelimeler
-    exclude = ['CUP', 'KUP', 'CDR', 'CL', 'EL', 'COL', 'FA', 'DFB', 'FRI', 'HAZ']
+# --- FONKSİYONLAR ---
+def veri_ayikla_gelismis(metin, takim_adi):
+    if not metin: return []
+    satirlar = metin.strip().split('\n')
+    lig_maclari = []
+    # Yaygın lig kısaltmaları
+    lig_kodlari = ["LL", "TSL", "EPL", "SA", "BL", "L1", "TFF"]
     
-    # Veriyi satırlara böl ve temizle
-    lines = [l.strip() for l in raw_data.split('\n') if l.strip()]
-    
-    # G/M/B harflerini referans alarak tarama yapar
-    for i in range(len(lines)):
-        if lines[i] in ['G', 'M', 'B']:
+    for i in range(len(satirlar)):
+        satir = satirlar[i]
+        if any(lig in satir for lig in lig_kodlari):
             try:
-                # Sonucun (G/M/B) hemen üzerindeki iki satır skorlardır
-                s1 = int(lines[i-2])
-                s2 = int(lines[i-1])
-                
-                # Kupa kontrolü (Geriye dönük 8 satırı kontrol et)
-                is_kupa = False
-                context_slice = lines[max(0, i-10):i]
-                if any(exc in " ".join(context_slice).upper() for exc in exclude):
-                    is_kupa = True
-                
-                if not is_kupa:
-                    # Takım isminin konumuna göre ev/dep tespiti
-                    # Dikey yapıda takım ismi genellikle skorların hemen üstündedir
-                    context_str = " ".join(context_slice).lower()
-                    
-                    if team_name.lower() in context_str:
-                        # Basit mantık: Girdiğin isim metinde varsa yakala
-                        # i-4 veya i-5 satırlarında takımın ev sahibi olup olmadığını kontrol et
-                        is_home = False
-                        if i-4 >= 0 and team_name.lower() in lines[i-4].lower():
-                            is_home = True
-                        elif i-5 >= 0 and team_name.lower() in lines[i-5].lower():
-                            is_home = True
-                            
-                        matches.append({
-                            'is_home': is_home,
-                            'scored': s1 if is_home else s2,
-                            'conceded': s2 if is_home else s1
-                        })
-            except (ValueError, IndexError):
+                # Skor ayıklama (Örn: 12G)
+                skor_match = re.search(r'(\d)(\d)', satirlar[i+2])
+                if skor_match:
+                    g1, g2 = int(skor_match.group(1)), int(skor_match.group(2))
+                    ev_takim = satirlar[i+1].strip()
+                    is_home = takim_adi.lower() in ev_takim.lower()
+                    lig_maclari.append({
+                        'is_home': is_home,
+                        'attigi': g1 if is_home else g2,
+                        'yedigi': g2 if is_home else g1
+                    })
+            except:
                 continue
-    return matches
+    return lig_maclari
 
-# 3. HESAPLAMA MANTIĞI
-def calculate_metrics(h_h, h_a, a_h, a_a):
-    def get_weighted(match_list):
-        total_f, total_a, total_y, total_d = 0, 0, 0, 0
-        n = len(match_list)
-        for i, m in enumerate(match_list, 1):
-            w = n + 1 - i
-            f = m['scored'] - m['conceded']
-            if m['scored'] > m['conceded']: f += 1
-            elif m['scored'] < m['conceded']: f -= 1
-            total_f += f * w
-            total_a += m['scored'] * w
-            total_y += m['conceded'] * w
-            total_d += i
-        return total_f, total_a, total_y, total_d
-
-    ee_f, ee_a, ee_y, ee_d = get_weighted(h_h)
-    ed_f, ed_a, ed_y, ed_d = get_weighted(h_a)
-    de_f, de_a, de_y, de_d = get_weighted(a_h)
-    dd_f, dd_a, dd_y, dd_d = get_weighted(a_a)
-
-    total = (2 * ee_f) + ed_f - (2 * dd_f) - de_f
-    payda_e = (4*ee_d + 2*ed_d + de_d + dd_d*2)
-    payda_d = (4*dd_d + 2*de_d + ed_d + ee_d*2)
+def monte_carlo_sim(ev_lambda, dep_lambda):
+    sim_sayisi = 10000
+    ev_goller = np.random.poisson(ev_lambda, sim_sayisi)
+    dep_goller = np.random.poisson(dep_lambda, sim_sayisi)
     
-    skor_e = (4*ee_a + 2*ed_a + de_y + dd_y*2) / payda_e if payda_e > 0 else 0
-    skor_d = (4*dd_a + 2*de_a + ed_y + ee_y*2) / payda_d if payda_d > 0 else 0
+    ev_gal = np.sum(ev_goller > dep_goller)
+    berabere = np.sum(ev_goller == dep_goller)
+    dep_gal = np.sum(ev_goller < dep_goller)
+    
+    return (ev_gal/sim_sayisi, berabere/sim_sayisi, dep_gal/sim_sayisi)
 
-    return {"total": total, "skor_e": skor_e, "skor_d": skor_d}
-
-# 4. ARAYÜZ
-st.title("⚽ Gelişmiş Maç Tahmin Sistemi")
-
+# --- ARAYÜZ / SIDEBAR ---
 with st.sidebar:
-    st.header("📊 Ayarlar")
-    n_ee = st.number_input("Ev - İç Saha", 1, 10, 3)
-    n_ed = st.number_input("Ev - Dış Saha", 1, 10, 3)
-    n_de = st.number_input("Dep - İç Saha", 1, 10, 3)
-    n_dd = st.number_input("Dep - Dış Saha", 1, 10, 3)
+    st.header("Takım Bilgileri")
+    ev_ad = st.text_input("Ev Sahibi Takım", "Ath. Bilbao")
+    dep_ad = st.text_input("Deplasman Takımı", "Real Sociedad")
+    st.divider()
+    st.info("Flashscore'dan 'Son Karşılaşmalar' kısmını kopyalayıp sağdaki kutulara yapıştırın.")
 
-c1, c2 = st.columns(2)
-with c1:
-    h_team_input = st.text_input("Ev Takımı Adı", "Ath. Bilbao")
-    h_data_input = st.text_area("Ev Takımı Verisi", height=250)
-with c2:
-    a_team_input = st.text_input("Deplasman Takımı Adı", "Elche")
-    a_data_input = st.text_area("Deplasman Takımı Verisi", height=250)
+# --- ANA PANEL ---
+col1, col2 = st.columns(2)
 
-if st.button("HESAPLA"):
-    if h_data_input and a_data_input:
-        h_res = parse_flashscore_data(h_data_input, h_team_input)
-        a_res = parse_flashscore_data(a_data_input, a_team_input)
+with col1:
+    ev_raw = st.text_area(f"{ev_ad} Son 10 Maç Verisi", height=200)
+with col2:
+    dep_raw = st.text_area(f"{dep_ad} Son 10 Maç Verisi", height=200)
+
+if st.button("ANALİZİ BAŞLAT"):
+    if ev_raw and dep_raw:
+        # Verileri İşle
+        ev_verileri = veri_ayikla_gelismis(ev_raw, ev_ad)
+        dep_verileri = veri_ayikla_gelismis(dep_raw, dep_ad)
         
-        h_h = [m for m in h_res if m['is_home']][:n_ee]
-        h_a = [m for m in h_res if not m['is_home']][:n_ed]
-        a_h = [m for m in a_res if m['is_home']][:n_de]
-        a_a = [m for m in a_res if not m['is_home']][:n_dd]
+        # Filtreleme (Ev/Dep ayrımı)
+        ee_maclar = [m for m in ev_verileri if m['is_home']][:3]
+        ed_maclar = [m for m in ev_verileri if not m['is_home']][:3]
+        de_maclar = [m for m in dep_verileri if m['is_home']][:3]
+        dd_maclar = [m for m in dep_verileri if not m['is_home']][:3]
 
-        if len(h_h) < n_ee or len(h_a) < n_ed or len(a_h) < n_de or len(a_a) < n_dd:
-            st.error(f"Yetersiz Veri! Bulunan -> Ev İç:{len(h_h)}, Ev Dış:{len(h_a)}, Dep İç:{len(a_h)}, Dep Dış:{len(a_a)}")
+        if len(ee_maclar) < 3 or len(dd_maclar) < 3:
+            st.error("⚠️ Yetersiz veri! En az 3 ev/deplasman lig maçı gerekiyor.")
         else:
-            res = calculate_metrics(h_h, h_a, a_h, a_a)
-            if res['total'] > 2: st.success(f"🔥 {h_team_input} BAS KARSIIM")
-            elif res['total'] < -2: st.warning(f"✈️ SERİ {a_team_input} BASS")
-            else: st.info("⚖️ BERABERE OLABİLİR")
+            # Senin Ağırlıklı Hesaplama Mantığın
+            def hesapla_metrikler(maclar):
+                total, atilan, yenilen, degisken = 0, 0, 0, 0
+                N = len(maclar)
+                for i, m in enumerate(maclar, 1):
+                    fark = (m['attigi'] - m['yedigi']) + (1 if m['attigi'] > m['yedigi'] else (-1 if m['attigi'] < m['yedigi'] else 0))
+                    carpan = (N + 1 - i)
+                    total += fark * carpan
+                    atilan += m['attigi'] * carpan
+                    yenilen += m['yedigi'] * carpan
+                    degisken += i
+                return total, atilan, yenilen, degisken
+
+            eeT, eeA, eeY, eeD = hesapla_metrikler(ee_maclar)
+            edT, edA, edY, edD = hesapla_metrikler(ed_maclar)
+            deT, deA, deY, deD = hesapla_metrikler(de_maclar)
+            ddT, ddA, ddY, ddD = hesapla_metrikler(dd_maclar)
+
+            total_skor = (2*eeT) + (edT) - (2*ddT) - (deT)
+            ev_puan = (4*eeA + 2*edA + deY + ddY*2) / (4*eeD + 2*edD + deD + ddD*2)
+            dep_puan = (4*ddA + 2*deA + edY + eeY*2) / (4*ddD + 2*deD + edD + eeD*2)
+
+            # --- SONUÇ GÖSTERİMİ ---
+            st.divider()
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Analiz Skoru", round(total_skor, 2))
+            c2.metric(f"{ev_ad} Gücü", round(ev_puan, 2))
+            c3.metric(f"{dep_ad} Gücü", round(dep_puan, 2))
+
+            # Karar
+            if total_skor > 2:
+                st.success(f"🔥 ÖNERİ: {ev_ad} BAS KARŞİİM")
+            elif total_skor < -2:
+                st.success(f"🚀 ÖNERİ: SERİ {dep_ad} BASS")
+            else:
+                st.warning("😐 DURUM: Berabere biter gibi moruk, riskli.")
+
+            # Simülasyon
+            ev_o, ber_o, dep_o = monte_carlo_sim(ev_puan, dep_puan)
             
-            st.metric("Genel Total", f"{res['total']}")
-            st.write(f"**Gol Gücü Puanları:** \n {h_team_input}: {res['skor_e']:.2f} | {a_team_input}: {res['skor_d']:.2f}")
+            st.subheader("🎲 Monte Carlo Simülasyon Tahminleri")
+            sim_data = pd.DataFrame({
+                "Sonuç": [ev_ad, "Beraberlik", dep_ad],
+                "Olasılık": [ev_o, ber_o, dep_o]
+            })
+            st.bar_chart(sim_data.set_index("Sonuç"))
+    else:
+        st.info("Lütfen her iki takımın da verilerini yapıştırın.")
